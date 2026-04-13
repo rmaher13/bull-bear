@@ -1,6 +1,16 @@
-# Bull & Bear With Me — Apr 13, 2026
-
-**📈 The Open**
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Bull &amp; Bear With Me</title>
+    <link>https://rmaher13.github.io/bull-bear</link>
+    <description>Markets, explained without the finance-bro energy. A daily 4-minute read for regular people.</description>
+    <language>en-us</language>
+    <item>
+      <title>Bull &amp; Bear With Me — Apr 13, 2026</title>
+      <link>https://rmaher13.github.io/bull-bear/briefs/2026-04-13.html</link>
+      <guid isPermaLink="false">bull-bear-2026-04-13</guid>
+      <pubDate>Mon, 13 Apr 2026 10:30:00 GMT</pubDate>
+      <description><![CDATA[**📈 The Open**
 
 The U.S. just blockaded the Strait of Hormuz, oil hit $104 a barrel, inflation jumped to 3.3%, Goldman missed on bonds, and somehow the S&P is basically flat. Markets are fine. Everything is fine.
 
@@ -34,3 +44,7 @@ The Strait of Hormuz is a narrow strip of water between Iran and Oman — about 
 **☕ The Close**
 
 Markets are "pricing in the geopolitical risk," which is analyst-speak for "we have no idea what happens next, but we've agreed to be calm about it." Respect the process.
+]]></description>
+    </item>
+  </channel>
+</rss>
