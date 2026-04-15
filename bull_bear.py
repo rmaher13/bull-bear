@@ -5,13 +5,13 @@ A 4-minute morning read for busy people who want to understand
 the market without the bullshit. Buddy at the bar energy.
 
 Usage:
-    python bull_bear.py              # generate + publish draft to beehiiv
+    python bull_bear.py              # generate + publish draft
     python bull_bear.py --dry-run    # preview only, no publish
 
 Environment variables required:
     ANTHROPIC_API_KEY  - your Anthropic API key
-    BEEHIIV_API_KEY    - beehiiv API key (optional; script runs without it)
-    BEEHIIV_PUB_ID     - beehiiv publication ID (optional)
+    BEEHIIV_API_KEY    - beehiiv API key (optional; legacy)
+    BEEHIIV_PUB_ID     - beehiiv publication ID (optional; legacy)
 
 Deployment: GitHub Actions cron, runs daily ~6:13am ET (with 6:43 retry).
 """
@@ -249,7 +249,7 @@ def publish_to_beehiiv(title: str, body_markdown: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 def rebuild_rss_feed():
-    """Build rss.xml from every brief in ./briefs/. beehiiv polls this via GitHub Pages."""
+    """Build rss.xml from every brief in ./briefs/. Substack polls this via GitHub Pages."""
     from xml.sax.saxutils import escape
 
     # Get every brief, newest first
@@ -300,9 +300,13 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    # Skip if today's brief already exists (handles the 6:43 AM retry run)
-    today = dt.date.today().isoformat()
+    # Use Eastern Time for the date (markets and readers are on ET, not UTC)
+    # Currently EDT (-4); change to -5 after DST ends in November 2026
+    et_now = dt.datetime.utcnow() - dt.timedelta(hours=4)
+    today = et_now.date().isoformat()
     out_path = OUTPUT_DIR / f"{today}.md"
+
+    # Skip if today's brief already exists (handles the 6:43 AM retry run)
     if out_path.exists():
         print(f"Brief for {today} already exists at {out_path}, skipping.")
         return
@@ -324,7 +328,7 @@ def main():
     time.sleep(65)
     brief = generate_brief(client, market_str, news)
 
-    title = f"Bull & Bear With Me — {dt.date.today().strftime('%b %d, %Y')}"
+    title = f"Bull & Bear With Me — {et_now.strftime('%b %d, %Y')}"
     out_path.write_text(f"# {title}\n\n{brief}\n", encoding="utf-8")
     print(f"Saved: {out_path}")
 
