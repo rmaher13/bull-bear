@@ -283,6 +283,13 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    # Skip if today's brief already exists (handles the 6:43 AM retry run)
+    today = dt.date.today().isoformat()
+    out_path = OUTPUT_DIR / f"{today}.md"
+    if out_path.exists():
+        print(f"Brief for {today} already exists at {out_path}, skipping.")
+        return
+
     client = anthropic.Anthropic()
 
     print("[1/4] Fetching market snapshot...")
@@ -300,9 +307,7 @@ def main():
     time.sleep(65)
     brief = generate_brief(client, market_str, news)
 
-    today = dt.date.today().isoformat()
     title = f"Bull & Bear With Me — {dt.date.today().strftime('%b %d, %Y')}"
-    out_path = OUTPUT_DIR / f"{today}.md"
     out_path.write_text(f"# {title}\n\n{brief}\n", encoding="utf-8")
     print(f"Saved: {out_path}")
 
