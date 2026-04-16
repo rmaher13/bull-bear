@@ -10,8 +10,8 @@ Usage:
 
 Environment variables required:
     ANTHROPIC_API_KEY  - your Anthropic API key
-    BEEHIIV_API_KEY    - beehiiv API key (optional; legacy)
-    BEEHIIV_PUB_ID     - beehiiv publication ID (optional; legacy)
+    SUBSTACK_SID       - substack.sid cookie value
+    SUBSTACK_LLI       - substack.lli cookie value
 
 Deployment: GitHub Actions cron, runs daily ~6:13am ET (with 6:43 retry).
 """
@@ -26,6 +26,8 @@ import urllib.request
 import urllib.error
 
 import anthropic
+from substack import Api
+from substack.post import Post
 
 # ---------- CONFIG ----------
 
@@ -36,6 +38,8 @@ CRYPTO_DISPLAY = {"BTC_USD": "Bitcoin", "ETH_USD": "Ethereum"}
 
 OUTPUT_DIR = Path("./briefs")
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+SUBSTACK_URL = "https://bullandbearwithme.substack.com"
 
 # ---------- VOICE (the most important part) ----------
 
@@ -230,42 +234,39 @@ Write today's Bull & Bear With Me. Start with the italicized subtitle. Hit the s
     )
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
-# ---------- PUBLISHING ----------
+# ---------- SUBSTACK PUBLISHING ----------
 
-def publish_to_beehiiv(title: str, body_markdown: str) -> dict:
-    """Creates a DRAFT in beehiiv. You review and tap send."""
-    api_key = os.environ.get("BEEHIIV_API_KEY")
-    pub_id = os.environ.get("BEEHIIV_PUB_ID")
-    if not api_key or not pub_id:
-        return {"skipped": "beehiiv credentials not set — brief saved locally only"}
+def publish_to_substack(title: str, brief: str) -> dict:
+    """Push today's brief to Substack as a draft. RJ taps send."""
+    sid = os.environ.get("SUBSTACK_SID")
+    lli = os.environ.get("SUBSTACK_LLI")
 
-    url = f"https://api.beehiiv.com/v2/publications/{pub_id}/posts"
-    payload = {
-        "title": title,
-        "subtitle": "Markets, explained without the finance-bro energy.",
-        "body_content": body_markdown,
-        "status": "draft",
-        "content_tags": ["markets", "daily", "bull-and-bear"],
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    if not sid or not lli:
+        return {"skipped": "SUBSTACK_SID / SUBSTACK_LLI not set — saved locally only"}
+
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return {"ok": True, "response": json.loads(r.read())}
-    except urllib.error.HTTPError as e:
-        return {"ok": False, "error": f"{e.code} {e.reason}", "body": e.read().decode()}
+        api = Api(
+            cookies_string=f"substack.sid={sid}; substack.lli={lli}",
+            publication_url=SUBSTACK_URL,
+        )
+        user_id = api.get_user_id()
+        post = Post(title=title, user_id=user_id)
+
+        # Add each paragraph as a separate block
+        for para in brief.split("\n\n"):
+            para = para.strip()
+            if para:
+                post.add({"type": "paragraph", "content": para})
+
+        result = api.post_draft(post.json())
+        return {"ok": True, "draft_id": result.get("id")}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+# ---------- RSS ----------
+
 def rebuild_rss_feed():
-    """Build rss.xml from every brief in ./briefs/. Substack polls this via GitHub Pages."""
+    """Build rss.xml from every brief in ./briefs/."""
     from xml.sax.saxutils import escape
 
     brief_files = sorted(OUTPUT_DIR.glob("*.md"), reverse=True)
@@ -311,29 +312,28 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    # Use Eastern Time for the date (markets and readers are on ET, not UTC)
-    # Currently EDT (-4); change to -5 after DST ends in November 2026
+    # Use Eastern Time (EDT = UTC-4; change to UTC-5 after DST ends Nov 2026)
     et_now = dt.datetime.utcnow() - dt.timedelta(hours=4)
     today = et_now.date().isoformat()
     out_path = OUTPUT_DIR / f"{today}.md"
 
-    # Skip if today's brief already exists (handles the 6:43 AM retry run)
+    # Skip if today's brief already exists (handles the 6:43 AM retry)
     if out_path.exists():
         print(f"Brief for {today} already exists at {out_path}, skipping.")
         return
 
     client = anthropic.Anthropic()
 
-    print("[1/4] Fetching market snapshot...")
+    print("[1/5] Fetching market snapshot...")
     snap = market_snapshot()
     market_str = format_market(snap)
     print(market_str)
 
-    print("\n[2/4] Gathering news...")
+    print("\n[2/5] Gathering news...")
     news = gather_news(client)
     print(news[:400] + ("..." if len(news) > 400 else ""))
 
-    print("\n[3/4] Writing today's brief...")
+    print("\n[3/5] Writing today's brief...")
     time.sleep(65)
     brief = generate_brief(client, market_str, news)
 
@@ -346,9 +346,18 @@ def main():
     print("=" * 50 + "\n")
     print(brief)
 
-    print("\n" + "=" * 50)
-    print("[4/4] Updating RSS feed...")
-    print("=" * 50)
+    if args.dry_run:
+        print("\n[DRY RUN] Skipping Substack publish and RSS update.")
+        return
+
+    print("\n[4/5] Pushing draft to Substack...")
+    result = publish_to_substack(title, brief)
+    if result.get("ok"):
+        print(f"Substack draft created. Draft ID: {result.get('draft_id')}")
+    else:
+        print(f"Substack publish result: {result}")
+
+    print("\n[5/5] Updating RSS feed...")
     rebuild_rss_feed()
     print("RSS feed updated at ./rss.xml")
 
