@@ -1,31 +1,27 @@
 name: Daily Brief
-
 on:
   schedule:
     - cron: '13 10 * * *'   # 6:13 AM ET (primary)
     - cron: '43 10 * * *'   # 6:43 AM ET (retry)
   workflow_dispatch:         # manual trigger button
-
 jobs:
   generate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
-        run: pip install anthropic requests
-
+        run: pip install anthropic requests python-substack
       - name: Run brief generator
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUBSTACK_SID: ${{ secrets.SUBSTACK_SID }}
+          SUBSTACK_LLI: ${{ secrets.SUBSTACK_LLI }}
         run: python bull_bear.py
-
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
