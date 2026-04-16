@@ -237,19 +237,44 @@ Write today's Bull & Bear With Me. Start with the italicized subtitle. Hit the s
 # ---------- EMAIL DELIVERY ----------
 
 def email_brief(title: str, brief: str) -> dict:
-    """Email the brief to RJ each morning, ready to copy/paste into Substack."""
+    """Email the brief to RJ each morning, formatted and ready to paste into Substack."""
     app_password = os.environ.get("GMAIL_APP_PASSWORD")
     if not app_password:
         return {"skipped": "GMAIL_APP_PASSWORD not set — brief saved locally only"}
 
     try:
-        msg = MIMEMultipart()
+        msg = MIMEMultipart("alternative")
         msg["From"] = GMAIL_ADDRESS
         msg["To"] = GMAIL_ADDRESS
         msg["Subject"] = title
 
-        body = f"{brief}\n\n---\nCopy everything above this line into Substack. Tap send. Done."
-        msg.attach(MIMEText(body, "plain"))
+        # Build HTML version with proper formatting
+        html_lines = []
+        for line in brief.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("*") and stripped.endswith("*") and len(stripped) > 2:
+                html_lines.append(f"<p><em>{stripped[1:-1]}</em></p>")
+            elif stripped.isupper() and len(stripped) > 3:
+                html_lines.append(f"<p><strong>{stripped}</strong></p>")
+            elif stripped.startswith("- "):
+                html_lines.append(f"<p>&bull; {stripped[2:]}</p>")
+            elif stripped == "":
+                html_lines.append("<br>")
+            else:
+                html_lines.append(f"<p>{stripped}</p>")
+
+        html_body = f"""
+<html><body style="font-family: Georgia, serif; max-width: 600px; margin: auto; font-size: 16px; line-height: 1.6;">
+{''.join(html_lines)}
+<hr>
+<p style="color: #999; font-size: 13px;">Copy everything above the line into Substack. Tap send. Done.</p>
+</body></html>
+"""
+
+        plain_body = f"{brief}\n\n---\nCopy everything above this line into Substack. Tap send. Done."
+
+        msg.attach(MIMEText(plain_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
 
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_ADDRESS, app_password)
