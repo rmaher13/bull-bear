@@ -9,9 +9,8 @@ Usage:
     python bull_bear.py --dry-run    # preview only, no publish
 
 Environment variables required:
-    ANTHROPIC_API_KEY  - your Anthropic API key
-    SUBSTACK_SID       - substack.sid cookie value
-    SUBSTACK_LLI       - substack.lli cookie value
+    ANTHROPIC_API_KEY   - your Anthropic API key
+    GMAIL_APP_PASSWORD  - Gmail app password for email delivery
 
 Deployment: GitHub Actions cron, runs daily ~6:13am ET (with 6:43 retry).
 """
@@ -21,13 +20,14 @@ import json
 import time
 import argparse
 import datetime as dt
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 import urllib.request
 import urllib.error
 
 import anthropic
-from substack import Api
-from substack.post import Post
 
 # ---------- CONFIG ----------
 
@@ -39,7 +39,7 @@ CRYPTO_DISPLAY = {"BTC_USD": "Bitcoin", "ETH_USD": "Ethereum"}
 OUTPUT_DIR = Path("./briefs")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-SUBSTACK_URL = "https://bullandbearwithme.substack.com"
+GMAIL_ADDRESS = "rjmaher2118@gmail.com"
 
 # ---------- VOICE (the most important part) ----------
 
@@ -234,32 +234,28 @@ Write today's Bull & Bear With Me. Start with the italicized subtitle. Hit the s
     )
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
-# ---------- SUBSTACK PUBLISHING ----------
+# ---------- EMAIL DELIVERY ----------
 
-def publish_to_substack(title: str, brief: str) -> dict:
-    """Push today's brief to Substack as a draft. RJ taps send."""
-    sid = os.environ.get("SUBSTACK_SID")
-    lli = os.environ.get("SUBSTACK_LLI")
-
-    if not sid or not lli:
-        return {"skipped": "SUBSTACK_SID / SUBSTACK_LLI not set — saved locally only"}
+def email_brief(title: str, brief: str) -> dict:
+    """Email the brief to RJ each morning, ready to copy/paste into Substack."""
+    app_password = os.environ.get("GMAIL_APP_PASSWORD")
+    if not app_password:
+        return {"skipped": "GMAIL_APP_PASSWORD not set — brief saved locally only"}
 
     try:
-        api = Api(
-            cookies_string=f"substack.sid={sid}; substack.lli={lli}",
-            publication_url=SUBSTACK_URL,
-        )
-        user_id = api.get_user_id()
-        post = Post(title=title, user_id=user_id)
+        msg = MIMEMultipart()
+        msg["From"] = GMAIL_ADDRESS
+        msg["To"] = GMAIL_ADDRESS
+        msg["Subject"] = title
 
-        # Add each paragraph as a separate block
-        for para in brief.split("\n\n"):
-            para = para.strip()
-            if para:
-                post.add({"type": "paragraph", "content": para})
+        body = f"{brief}\n\n---\nCopy everything above this line into Substack. Tap send. Done."
+        msg.attach(MIMEText(body, "plain"))
 
-        result = api.post_draft(post.json())
-        return {"ok": True, "draft_id": result.get("id")}
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_ADDRESS, app_password)
+            server.sendmail(GMAIL_ADDRESS, GMAIL_ADDRESS, msg.as_string())
+
+        return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -347,15 +343,15 @@ def main():
     print(brief)
 
     if args.dry_run:
-        print("\n[DRY RUN] Skipping Substack publish and RSS update.")
+        print("\n[DRY RUN] Skipping email and RSS update.")
         return
 
-    print("\n[4/5] Pushing draft to Substack...")
-    result = publish_to_substack(title, brief)
+    print("\n[4/5] Emailing brief...")
+    result = email_brief(title, brief)
     if result.get("ok"):
-        print(f"Substack draft created. Draft ID: {result.get('draft_id')}")
+        print("Brief emailed successfully.")
     else:
-        print(f"Substack publish result: {result}")
+        print(f"Email result: {result}")
 
     print("\n[5/5] Updating RSS feed...")
     rebuild_rss_feed()
