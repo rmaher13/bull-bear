@@ -15,12 +15,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install anthropic requests python-substack
+        run: pip install anthropic requests
       - name: Run brief generator
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SUBSTACK_SID: ${{ secrets.SUBSTACK_SID }}
-          SUBSTACK_LLI: ${{ secrets.SUBSTACK_LLI }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python bull_bear.py
       - name: Commit and push
         run: |
