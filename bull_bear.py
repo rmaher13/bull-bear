@@ -5,8 +5,8 @@ A 4-minute morning read for busy people who want to understand
 the market without the bullshit. Buddy at the bar energy.
 
 Usage:
-    python bull_bear.py              # generate + publish draft
-    python bull_bear.py --dry-run    # preview only, no publish
+    python bull_bear.py              # generate + send email
+    python bull_bear.py --dry-run    # preview only, no email
 
 Environment variables required:
     ANTHROPIC_API_KEY   - your Anthropic API key
@@ -31,17 +31,19 @@ import anthropic
 
 # ---------- CONFIG ----------
 
-MODEL = "claude-sonnet-4-6"   # quality matters — this is the voice
+MODEL = "claude-sonnet-4-6"
 
-CRYPTO_TICKERS = ["BTC_USD", "ETH_USD"]
 CRYPTO_DISPLAY = {"BTC_USD": "Bitcoin", "ETH_USD": "Ethereum"}
 
 OUTPUT_DIR = Path("./briefs")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 GMAIL_ADDRESS = "rjmaher2118@gmail.com"
+NOTIFY_ADDRESS = "djgatz7@gmail.com"
 
-# ---------- VOICE (the most important part) ----------
+PREVIOUS_BRIEFS_COUNT = 3  # how many past briefs to feed in as context
+
+# ---------- VOICE ----------
 
 VOICE_SYSTEM = """You write "Bull & Bear With Me," a daily 4-minute morning newsletter for busy people who want to know what's going on in the markets without the bullshit. You are NOT an AI assistant writing a market summary. You are a regular guy who reads the market every morning and writes it up like he's telling his buddies at the bar. Write like a human columnist, not like a chatbot.
 
@@ -130,7 +132,6 @@ LENGTH: 450-550 words total including the subtitle. Tight. Every word earns its 
 # ---------- MARKET DATA ----------
 
 def fetch_crypto(instrument: str) -> dict:
-    """Crypto.com public API — no auth needed."""
     url = f"https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name={instrument}"
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
@@ -145,7 +146,6 @@ def fetch_crypto(instrument: str) -> dict:
         return {"name": CRYPTO_DISPLAY.get(instrument, instrument), "error": str(e)}
 
 def fetch_stock_index(symbol: str) -> dict:
-    """Pull index quote from Yahoo Finance's public chart endpoint. No API key."""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -163,7 +163,6 @@ def fetch_stock_index(symbol: str) -> dict:
         return {"symbol": symbol, "error": str(e)}
 
 def market_snapshot() -> dict:
-    """Pull S&P, Nasdaq, Dow, BTC, ETH."""
     return {
         "sp500": fetch_stock_index("^GSPC"),
         "nasdaq": fetch_stock_index("^IXIC"),
@@ -184,15 +183,29 @@ def format_market(snap: dict) -> str:
             lines.append(f"- {lbl}: data unavailable")
             continue
         arrow = "▲" if d.get("change_pct", 0) >= 0 else "▼"
-        price = d.get("price", 0)
-        pct = d.get("change_pct", 0)
-        lines.append(f"- {lbl}: ${price:,.2f} {arrow} {pct:+.2f}%")
+        lines.append(f"- {lbl}: ${d['price']:,.2f} {arrow} {d['change_pct']:+.2f}%")
     return "\n".join(lines)
+
+# ---------- PREVIOUS BRIEFS ----------
+
+def load_previous_briefs(today: str) -> str:
+    """Load the last N briefs (excluding today) to give Claude context."""
+    all_briefs = sorted(OUTPUT_DIR.glob("*.md"), reverse=True)
+    previous = [b for b in all_briefs if b.stem < today][:PREVIOUS_BRIEFS_COUNT]
+
+    if not previous:
+        return ""
+
+    sections = []
+    for bf in reversed(previous):  # oldest first
+        content = bf.read_text(encoding="utf-8").strip()
+        sections.append(f"--- Brief from {bf.stem} ---\n{content}")
+
+    return "\n\n".join(sections)
 
 # ---------- NEWS GATHERING ----------
 
 def gather_news(client: anthropic.Anthropic) -> str:
-    """Use Claude + web_search to pull the last 24h of market-moving news."""
     today = dt.date.today().isoformat()
     prompt = f"""Today is {today}. Search the web for the most important financial news from the last 24 hours that would matter to a regular working person with a 401(k) and maybe a little crypto.
 
@@ -215,15 +228,24 @@ Return 8-12 bullets. Each bullet: one factual sentence + source in parentheses. 
 
 # ---------- BRIEF GENERATION ----------
 
-def generate_brief(client: anthropic.Anthropic, market: str, news: str) -> str:
+def generate_brief(client: anthropic.Anthropic, market: str, news: str, previous_briefs: str) -> str:
     today = dt.date.today().strftime("%A, %B %d, %Y")
+
+    previous_context = ""
+    if previous_briefs:
+        previous_context = f"""
+PREVIOUS BRIEFS (for context — avoid repeating the same stories or explainers, but if a story is developing you can reference it and go deeper):
+{previous_briefs}
+
+"""
+
     user_msg = f"""Date: {today}
 
 {market}
 
 NEWS FROM THE LAST 24H:
 {news}
-
+{previous_context}
 Write today's Bull & Bear With Me. Start with the italicized subtitle. Hit the structure as your toolkit, not a checklist. Make me laugh. Teach me one useful thing. Keep it 450-550 words."""
 
     resp = client.messages.create(
@@ -237,7 +259,7 @@ Write today's Bull & Bear With Me. Start with the italicized subtitle. Hit the s
 # ---------- EMAIL DELIVERY ----------
 
 def email_brief(title: str, brief: str) -> dict:
-    """Email the brief to RJ each morning, formatted and ready to paste into Substack."""
+    """Email the brief each morning, formatted and ready to paste into Substack."""
     app_password = os.environ.get("GMAIL_APP_PASSWORD")
     if not app_password:
         return {"skipped": "GMAIL_APP_PASSWORD not set — brief saved locally only"}
@@ -245,10 +267,10 @@ def email_brief(title: str, brief: str) -> dict:
     try:
         msg = MIMEMultipart("alternative")
         msg["From"] = GMAIL_ADDRESS
-        msg["To"] = GMAIL_ADDRESS
+        msg["To"] = ", ".join([GMAIL_ADDRESS, NOTIFY_ADDRESS])
         msg["Subject"] = title
 
-        # Build HTML version with proper formatting
+        # Build HTML version
         html_lines = []
         for line in brief.split("\n"):
             stripped = line.strip()
@@ -270,7 +292,6 @@ def email_brief(title: str, brief: str) -> dict:
 <p style="color: #999; font-size: 13px;">Copy everything above the line into Substack. Tap send. Done.</p>
 </body></html>
 """
-
         plain_body = f"{brief}\n\n---\nCopy everything above this line into Substack. Tap send. Done."
 
         msg.attach(MIMEText(plain_body, "plain"))
@@ -278,7 +299,7 @@ def email_brief(title: str, brief: str) -> dict:
 
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_ADDRESS, app_password)
-            server.sendmail(GMAIL_ADDRESS, GMAIL_ADDRESS, msg.as_string())
+            server.sendmail(GMAIL_ADDRESS, [GMAIL_ADDRESS, NOTIFY_ADDRESS], msg.as_string())
 
         return {"ok": True}
     except Exception as e:
@@ -287,7 +308,6 @@ def email_brief(title: str, brief: str) -> dict:
 # ---------- RSS ----------
 
 def rebuild_rss_feed():
-    """Build rss.xml from every brief in ./briefs/."""
     from xml.sax.saxutils import escape
 
     brief_files = sorted(OUTPUT_DIR.glob("*.md"), reverse=True)
@@ -333,7 +353,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    # Use Eastern Time (EDT = UTC-4; change to UTC-5 after DST ends Nov 2026)
+    # Eastern Time (EDT = UTC-4; change to UTC-5 after DST ends Nov 2026)
     et_now = dt.datetime.utcnow() - dt.timedelta(hours=4)
     today = et_now.date().isoformat()
     out_path = OUTPUT_DIR / f"{today}.md"
@@ -354,9 +374,16 @@ def main():
     news = gather_news(client)
     print(news[:400] + ("..." if len(news) > 400 else ""))
 
-    print("\n[3/5] Writing today's brief...")
+    print("\n[3/5] Loading previous briefs...")
+    previous_briefs = load_previous_briefs(today)
+    if previous_briefs:
+        print(f"Loaded {PREVIOUS_BRIEFS_COUNT} previous briefs for context.")
+    else:
+        print("No previous briefs found.")
+
+    print("\n[4/5] Writing today's brief...")
     time.sleep(65)
-    brief = generate_brief(client, market_str, news)
+    brief = generate_brief(client, market_str, news, previous_briefs)
 
     title = f"Bull & Bear With Me — {et_now.strftime('%b %d, %Y')}"
     out_path.write_text(f"# {title}\n\n{brief}\n", encoding="utf-8")
@@ -371,14 +398,13 @@ def main():
         print("\n[DRY RUN] Skipping email and RSS update.")
         return
 
-    print("\n[4/5] Emailing brief...")
+    print("\n[5/5] Emailing brief and updating RSS...")
     result = email_brief(title, brief)
     if result.get("ok"):
         print("Brief emailed successfully.")
     else:
         print(f"Email result: {result}")
 
-    print("\n[5/5] Updating RSS feed...")
     rebuild_rss_feed()
     print("RSS feed updated at ./rss.xml")
 
